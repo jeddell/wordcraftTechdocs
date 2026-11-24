@@ -153,6 +153,63 @@ def drop_direct_numbering(xml: str, style_ids: set[str]) -> str:
     return re.sub(r"<w:p\b[^>]*>.*?</w:p>", fix, xml, flags=re.S)
 
 
+# Schema order of a numbering level's children (ECMA-376 CT_Lvl). LibreOffice writes pStyle before
+# numFmt, which a strict reader (Word's validator) rejects.
+LVL_ORDER = ["start", "numFmt", "lvlRestart", "pStyle", "isLgl", "suff", "lvlText", "lvlPicBulletId", "legacy", "lvlJc", "pPr", "rPr"]
+
+
+def order_levels(numbering: str) -> str:
+    def fix(m: re.Match) -> str:
+        head, body, tail = m.group(1), m.group(2), m.group(3)
+        # Split the level's children (self-closing or with content, one level of nesting deep).
+        found = list(re.finditer(r"<w:(\w+)\b(?:[^>]*/>|[^>]*>.*?</w:\1>)", body, re.S))
+        kids = [k.group(1) for k in found]
+        parts = [k.group(0) for k in found]
+        if re.sub(r"\s+", "", "".join(parts)) != re.sub(r"\s+", "", body):
+            return m.group(0)  # something unexpected in this level: leave it alone
+        rank = {n: i for i, n in enumerate(LVL_ORDER)}
+        ordered = [p for _, p in sorted(zip(kids, parts), key=lambda kp: rank.get(kp[0], len(LVL_ORDER)))]
+        return head + "".join(ordered) + tail
+
+    return re.sub(r"(<w:lvl\b[^>]*>)(.*?)(</w:lvl>)", fix, numbering, flags=re.S)
+
+
+def drop_orphan_bookmarks(xml: str) -> str:
+    """Bookmark starts with no end (the conversion leaves duplicates in headers and footers); a
+    saved document would repeat their ids."""
+    ends = set(re.findall(r'<w:bookmarkEnd [^>]*w:id="(\d+)"', xml))
+    return re.sub(r'<w:bookmarkStart [^>]*w:id="(\d+)"[^>]*/>', lambda m: m.group(0) if m.group(1) in ends else "", xml)
+
+
+def sect_pr_last(xml: str) -> str:
+    """A section break's settings (sectPr) go last in its paragraph's properties (only a revision
+    mark may follow); LibreOffice writes them first."""
+
+    def fix(m: re.Match) -> str:
+        ppr = m.group(0)
+        sp = re.search(r"<w:sectPr\b.*?</w:sectPr>", ppr, re.S)
+        if not sp:
+            return ppr
+        rest = ppr.replace(sp.group(0), "", 1)
+        at = rest.find("<w:pPrChange")
+        if at < 0:
+            at = rest.rfind("</w:pPr>")
+        return rest[:at] + sp.group(0) + rest[at:]
+
+    return re.sub(r"<w:pPr>.*?</w:pPr>", fix, xml, flags=re.S)
+
+
+MEDIA_TYPES = {"wmf": "image/x-wmf", "emf": "image/x-emf", "png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg", "gif": "image/gif", "bmp": "image/bmp", "tif": "image/tiff", "tiff": "image/tiff"}
+
+
+def declare_media(ct: str, names: list[str]) -> str:
+    """Every media file's extension declared in [Content_Types].xml, as Word requires."""
+    for ext in sorted({n.rsplit(".", 1)[-1].lower() for n in names if n.startswith("word/media/") and "." in n}):
+        if ext in MEDIA_TYPES and f'Extension="{ext}"' not in ct:
+            ct = ct.replace("</Types>", f'<Default Extension="{ext}" ContentType="{MEDIA_TYPES[ext]}"/></Types>')
+    return ct
+
+
 def fix_styles(xml: str) -> str:
     def strip_num(m: re.Match) -> str:
         # Based on Caption (which only adds bold, as these styles already have) so lists of
@@ -221,12 +278,14 @@ def postprocess(src_docx: Path, dst: Path, kind: str) -> dict:
     if "word/numbering.xml" in parts:
         parts["word/numbering.xml"] = fix_list_indents(styles, parts["word/numbering.xml"].decode("utf-8")).encode()
     doc, report["captions"] = fix_document(parts["word/document.xml"].decode("utf-8"))
-    doc = drop_direct_numbering(doc, level_ids)
+    doc = sect_pr_last(drop_direct_numbering(doc, level_ids))
     parts["word/document.xml"] = doc.encode()
 
     for n in list(parts):
         if n.startswith("word/") and n.endswith(".xml"):
-            parts[n] = fix_fonts_and_language(parts[n].decode("utf-8")).encode()
+            parts[n] = drop_orphan_bookmarks(fix_fonts_and_language(parts[n].decode("utf-8"))).encode()
+    if "word/numbering.xml" in parts:
+        parts["word/numbering.xml"] = order_levels(parts["word/numbering.xml"].decode("utf-8")).encode()
 
     if "word/settings.xml" in parts:
         s = parts["word/settings.xml"].decode("utf-8")
@@ -237,6 +296,7 @@ def postprocess(src_docx: Path, dst: Path, kind: str) -> dict:
     ct = re.sub(r"<Override[^>]*macroEnabled[^>]*/>", "", ct)
     if "/docProps/custom.xml" not in ct:
         ct = ct.replace("</Types>", f'<Override PartName="/docProps/custom.xml" ContentType="{CUSTOM_CT}"/></Types>')
+    ct = declare_media(ct, list(parts))
     parts["[Content_Types].xml"] = ct.encode()
 
     parts["docProps/custom.xml"] = custom_props(kind).encode()

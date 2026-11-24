@@ -1,0 +1,61 @@
+# Fork-only (jeddell/wordcraftTechdocs): builds the EMEI/UHB edition of WordCraft for Windows and
+# publishes it as a downloadable zip (Actions run page > Artifacts). Unsigned, portable: unzip and
+# run WordCraft.exe. Upstream's signed release pipeline (release.yml) is untouched.
+name: EMEI Windows build
+
+on:
+  push:
+    branches: [emei-uhb]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emei-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # Spelling dictionaries and hyphenation (optional build input, pinned as upstream pins it).
+      - name: Read craft-i18n pin
+        id: i18n
+        shell: bash
+        run: echo "rev=$(tr -d '[:space:]' < craft-i18n.rev)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          repository: storytold/craft-i18n
+          ref: ${{ steps.i18n.outputs.rev }}
+          path: craft-i18n
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ -d craft-i18n/language-data ]; then export CRAFT_I18N_DIR="$PWD/craft-i18n"; fi
+          cargo build --release -p wordcraft -p wordcraft-cli
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "WordCraft-EMEI-UHB"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item target/release/wordcraft.exe "$out/WordCraft.exe"
+          Copy-Item target/release/wordcraft-cli.exe "$out/wordcraft-cli.exe"
+          Copy-Item -Recurse emei/templates "$out/EMEI Templates"
+          Copy-Item emei/INSTALL-WINDOWS.md "$out/README.md"
+          Copy-Item LICENSE* $out -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WordCraft-EMEI-UHB-windows-x64
+          path: WordCraft-EMEI-UHB
+          retention-days: 90

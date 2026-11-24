@@ -49,7 +49,13 @@ and tags each template with the document property `EMEIUHB = EMEI | UHB`.
   number per file), Draft (diagonal DRAFT watermark). UHB captions `Figure {SEQ Chapter \c}-{SEQ
   Figure}` are listed: WordCraft's list builder now matches a caption by any of its SEQ fields, as
   Word does (`crates/engine/src/cmd/citations/generated.rs`, marked "fork"). Done.
-- Step 6: packaging.
+- Step 6: Windows build and file checks. `.github/workflows/emei-windows.yml` builds a portable
+  zip (WordCraft.exe, wordcraft-cli.exe, `EMEI Templates/`, INSTALL-WINDOWS.md) on every push to
+  `emei-uhb`; the app lists templates from an `EMEI Templates` folder beside the .exe
+  (`apps/wordcraft/src/main.rs`, marked fork). The converter also repairs LibreOffice output a
+  strict reader rejects (numbering element order, section-break order, undeclared WMF media,
+  orphan bookmarks): all 44 templates and documents saved by WordCraft pass OOXML schema
+  validation. Done.
 
 Tip: add the contents and lists when the body is written (or in their own file, as UHB AI/AJ/AK
 are), then press Update All after later edits.

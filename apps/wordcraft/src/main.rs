@@ -210,7 +210,12 @@ fn services(spool: Spool, intake: FileIntake) -> Services {
     let make_default_app: Option<MakeDefault> = None;
     Services {
         print: Some(spool),
-        templates_dir: wordcraft_control_key::settings_dir().map(|d| d.join("Templates")),
+        // fork (EMEI/UHB): an `EMEI Templates` folder beside the program (the portable zip) comes first.
+        templates_dir: std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|d| d.join("EMEI Templates")))
+            .filter(|d| d.is_dir())
+            .or_else(|| wordcraft_control_key::settings_dir().map(|d| d.join("Templates"))),
         make_default_app,
         intake: Some(intake),
         ..Default::default()
