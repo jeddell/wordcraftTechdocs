@@ -39,4 +39,14 @@ and tags each template with the document property `EMEIUHB = EMEI | UHB`.
 - Known: UHB captions use the legacy chapter scheme (`Chapter {SEQ Chapter}`,
   `Table {SEQ Chapter}-{SEQ Table}`). They display correctly but WordCraft's lists of
   figures/tables do not read them yet; to be resolved with Insert Chapter (step 5).
-- Steps 3–6: EMEI ribbon tab, inserts, document tools, packaging. Not started.
+- Step 3: EMEI tab (after Home): Insert/Restyle toggle; Division/Main, Group and Para headings;
+  Paragraph and SubPara 1–4, numbered and unnumbered (table variants inside tables); Promote and
+  Demote; the legacy one-level-deeper rule. Done.
+- Step 4: Inserts: Warning, Caution, Note (symbols compiled in from `assets/wcn/`); Graphic (title
+  dialog, then the picture chooser; caption "Figure n    Title" below, UHB "Figure c-n"); Table
+  (title, rows, columns, position/indent, row height, column widths; title above, grid borders);
+  In-line Heading. Done.
+- Steps 5–6: document tools (TOC, lists of figures/tables, Insert Chapter, Draft), packaging.
+
+All tab actions are engine commands (`wordcraft-cli commands | grep ^emei.`), so they also work
+from scripts: see `crates/engine/src/cmd/emei.rs` for parameters.

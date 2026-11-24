@@ -209,6 +209,258 @@ fn shift(s: &mut Session, step: i8) -> CmdResult {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Inserts: Warning / Caution / Note, figures, tables, in-line headings.
+// ---------------------------------------------------------------------------------------------
+
+/// The Warning and Caution symbols, compiled in from `emei/assets/wcn/` (see its README).
+const WARNING_SYMBOL: &[u8] = include_bytes!("../../../../emei/assets/wcn/Warning.wmf");
+const CAUTION_SYMBOL: &[u8] = include_bytes!("../../../../emei/assets/wcn/Caution.wmf");
+
+/// Caption separator between the number and the title: four no-break spaces, as the house style.
+const CAPTION_GAP: &str = "\u{a0}\u{a0}\u{a0}\u{a0}";
+
+fn need_kind(s: &Session) -> Result<Kind, CmdError> {
+    kind(s).ok_or_else(|| CmdError::Disabled("this document doesn't use the EMEI or UHB styles".into()))
+}
+
+fn need_style(s: &Session, k: Kind, n: u8) -> Result<String, CmdError> {
+    style_named(s, k, n).ok_or_else(|| CmdError::Failed(format!("this document has no style numbered {n:02}")))
+}
+
+/// The style whose name starts with `prefix` (`"27b "`) in set `k`.
+fn need_lettered(s: &Session, k: Kind, prefix: &str) -> Result<String, CmdError> {
+    s.doc
+        .styles
+        .styles
+        .iter()
+        .find(|st| st.name.starts_with(prefix) && st.name.ends_with(k.suffix()))
+        .map(|st| st.name.clone())
+        .ok_or_else(|| CmdError::Failed(format!("this document has no `{}…{}` style", prefix.trim(), k.suffix())))
+}
+
+/// Move the caret to the end of the current paragraph and start a new one after it.
+fn new_paragraph_after(s: &mut Session) -> Result<(), CmdError> {
+    let (_, end) = s.sel.ordered();
+    let len = s.doc.para_at(&end).map(|p| p.len()).unwrap_or(end.off);
+    s.sel = Selection::caret(Pos::new(end.story, end.path.clone(), len));
+    s.run("text.newParagraph", &json!({}))?;
+    Ok(())
+}
+
+/// A new paragraph after the current one, unless the current one is empty (then it is reused).
+fn fresh_paragraph(s: &mut Session) -> Result<(), CmdError> {
+    let empty = s.doc.para_at(&s.sel.focus).is_none_or(|p| p.is_empty());
+    if empty {
+        let f = s.sel.focus.clone();
+        s.sel = Selection::caret(Pos::new(f.story, f.path, 0));
+        Ok(())
+    } else {
+        new_paragraph_after(s)
+    }
+}
+
+/// The symbols' widths in the legacy templates: Warning 2.84 cm, Caution 3.21 cm.
+const WARNING_WIDTH_PT: f32 = 80.6;
+const CAUTION_WIDTH_PT: f32 = 90.9;
+
+fn picture_data(bytes: &[u8], width: f32) -> Value {
+    json!({ "data": craft_mime::transfer::base64(bytes), "width": width })
+}
+
+/// Warning / Caution / Note: the symbol paragraph, then the paragraph for its text.
+fn wcn(s: &mut Session, which: &str, v: &Value) -> CmdResult {
+    let k = need_kind(s)?;
+    let (symbol_style, text_style) = match which {
+        "warning" => (need_style(s, k, 29)?, need_lettered(s, k, "30c ")?),
+        "caution" => (need_lettered(s, k, "30a ")?, need_lettered(s, k, "30c ")?),
+        _ => (need_lettered(s, k, "31a ")?, need_lettered(s, k, "31c ")?),
+    };
+    new_paragraph_after(s)?;
+    s.run("para.style", &json!({"style": symbol_style}))?;
+    match which {
+        "warning" => s.run("insert.picture", &picture_data(WARNING_SYMBOL, WARNING_WIDTH_PT))?,
+        "caution" => s.run("insert.picture", &picture_data(CAUTION_SYMBOL, CAUTION_WIDTH_PT))?,
+        _ => s.run("text.insert", &json!({"text": "NOTE"}))?,
+    };
+    new_paragraph_after(s)?;
+    s.run("para.style", &json!({"style": text_style}))?;
+    if let Some(text) = v.get("text").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+        s.run("text.insert", &json!({"text": text}))?;
+    }
+    sel_result(s)
+}
+
+/// Title case as the old toolbar applied it to captions and in-line headings: each word starts
+/// with a capital. The rest of each word is kept as typed, so acronyms (NSN, EMEI) survive.
+fn title_case(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut start = true;
+    for c in text.trim().chars() {
+        if start && c.is_alphabetic() {
+            out.extend(c.to_uppercase());
+            start = false;
+        } else {
+            out.push(c);
+            if c.is_whitespace() || c == '-' || c == '/' {
+                start = true;
+            } else if c.is_alphanumeric() {
+                start = false;
+            }
+        }
+    }
+    out
+}
+
+/// Fill the (empty, styled) caption paragraph at the caret: `Figure 3    Title`; in a UHB the
+/// number carries its chapter: `Figure 6-3    Title`, as the UHB templates' captions do.
+fn write_caption(s: &mut Session, k: Kind, label: &str, title: &str) -> Result<(), CmdError> {
+    s.run("text.insert", &json!({"text": format!("{label} ")}))?;
+    if k == Kind::Uhb {
+        s.run("insert.field", &json!({"instr": " SEQ Chapter \\c \\* ARABIC ", "result": "1"}))?;
+        s.run("text.insert", &json!({"text": "-"}))?;
+    }
+    s.run("insert.field", &json!({"instr": format!(" SEQ {label} \\* ARABIC "), "result": "1"}))?;
+    s.run("text.insert", &json!({"text": format!("{CAPTION_GAP}{}", title_case(title))}))?;
+    Ok(())
+}
+
+fn title_param(v: &Value) -> Result<String, CmdError> {
+    let t = v.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if t.is_empty() {
+        return Err(CmdError::Params("`title` is required (the caption text, without the word Figure/Table or its number)".into()));
+    }
+    Ok(t)
+}
+
+/// Insert Graphic: a Figure paragraph (with the picture, when one is given) and its caption below.
+/// Without a picture the caret is left in the empty Figure paragraph, where the app's picture
+/// chooser then inserts the chosen file.
+fn figure(s: &mut Session, v: &Value) -> CmdResult {
+    let k = need_kind(s)?;
+    let title = title_param(v)?;
+    let figure_style = need_lettered(s, k, "28a ")?;
+    let caption_style = need_lettered(s, k, "28b ")?;
+    fresh_paragraph(s)?;
+    s.run("para.style", &json!({"style": figure_style}))?;
+    let figure_at = s.sel.focus.clone();
+    let has_picture = v.get("path").is_some() || v.get("data").is_some();
+    if has_picture {
+        let mut pic = json!({});
+        for key in ["path", "data", "width", "alt"] {
+            if let Some(x) = v.get(key) {
+                pic[key] = x.clone();
+            }
+        }
+        s.run("insert.picture", &pic)?;
+    }
+    new_paragraph_after(s)?;
+    s.run("para.style", &json!({"style": caption_style}))?;
+    write_caption(s, k, "Figure", &title)?;
+    if !has_picture {
+        s.sel = Selection::caret(Pos::new(figure_at.story, figure_at.path, 0));
+    }
+    let mut out = sel_result(s)?;
+    if let Some(o) = out.as_object_mut() {
+        o.insert("awaitingPicture".into(), json!(!has_picture));
+    }
+    Ok(out)
+}
+
+const CM: f32 = 72.0 / 2.54;
+
+/// Create Table: the Table title above, then the table, its cells in the Table style.
+fn table(s: &mut Session, v: &Value) -> CmdResult {
+    let k = need_kind(s)?;
+    let title = title_param(v)?;
+    let rows = v.get("rows").and_then(Value::as_u64).unwrap_or(2).clamp(1, 1000);
+    let cols = v.get("cols").and_then(Value::as_u64).unwrap_or(3).clamp(1, 63);
+    let title_style = need_lettered(s, k, "27b ")?;
+    let cell_style = need_lettered(s, k, "27a ")?;
+    fresh_paragraph(s)?;
+    s.run("para.style", &json!({"style": title_style}))?;
+    write_caption(s, k, "Table", &title)?;
+    new_paragraph_after(s)?;
+    s.run("para.style", &json!({"style": cell_style}))?;
+    s.run("insert.table", &json!({"rows": rows, "cols": cols}))?;
+    let first_cell = s.sel.clone();
+
+    // Whole-table settings.
+    s.run("table.selectTable", &json!({}))?;
+    s.run("para.style", &json!({"style": cell_style}))?;
+    // Single-line grid borders (½ pt), as EMEI/UHB tables have.
+    s.run("table.borders", &json!({"kind": "all", "width": 0.5}))?;
+    let mut props = json!({});
+    match v.get("align").and_then(Value::as_str).unwrap_or("left") {
+        "centre" | "center" => props["align"] = json!("center"),
+        "right" => props["align"] = json!("right"),
+        _ => {
+            props["align"] = json!("left");
+            if let Some(cm) = v.get("indent").and_then(Value::as_f64) {
+                props["indent"] = json!(cm as f32 * CM);
+            }
+        }
+    }
+    match v.get("rowHeightRule").and_then(Value::as_str) {
+        Some("atLeast") | Some("exact") => {
+            let cm = v.get("rowHeight").and_then(Value::as_f64).unwrap_or(0.6) as f32;
+            props["rowHeight"] = json!(cm * CM);
+            props["rowHeightRule"] = json!(v["rowHeightRule"].clone());
+        }
+        _ => {}
+    }
+    s.run("table.properties", &props)?;
+
+    // Column widths (cm), left to right; missing or empty entries keep the even split.
+    if let Some(widths) = v.get("widths").and_then(Value::as_array) {
+        s.sel = first_cell.clone();
+        for (i, w) in widths.iter().take(cols as usize).enumerate() {
+            if i > 0 {
+                s.run("text.tab", &json!({}))?;
+            }
+            if let Some(cm) = w.as_f64().filter(|cm| *cm > 0.0) {
+                s.run("table.properties", &json!({"columnWidth": cm as f32 * CM}))?;
+            }
+        }
+    }
+    s.sel = first_cell;
+    sel_result(s)
+}
+
+/// In-line heading: a bold Arial title (title case, full stop, two spaces) at the start of the
+/// current Paragraph..SubPara 3; in restyle mode, the selection is made bold Arial instead.
+fn inline_heading(s: &mut Session, v: &Value) -> CmdResult {
+    let k = need_kind(s)?;
+    if !insert_mode() {
+        if s.sel.is_collapsed() {
+            return Err(CmdError::Failed("select the words to make an in-line heading".into()));
+        }
+        s.run("format.bold", &json!({"value": true}))?;
+        s.run("format.italic", &json!({"value": false}))?;
+        s.run("format.font", &json!({"name": "Arial"}))?;
+        return sel_result(s);
+    }
+    let current = number_of(&style_at(s, &s.sel.focus), k);
+    if !matches!(current, Some(7..=10)) {
+        return Err(CmdError::Failed("an in-line heading goes at the start of a Paragraph or SubPara 1–3; put the cursor in one".into()));
+    }
+    let mut title = title_case(&title_param(v)?);
+    if !title.ends_with('.') {
+        title.push('.');
+    }
+    let at = s.sel.focus.clone();
+    let start = Pos::new(at.story, at.path.clone(), 0);
+    s.sel = Selection::caret(start.clone());
+    s.run("text.insert", &json!({"text": format!("{title}  ")}))?;
+    s.sel = Selection { anchor: start.clone(), focus: Pos::new(at.story, at.path.clone(), title.len()) };
+    s.run("format.bold", &json!({"value": true}))?;
+    s.run("format.italic", &json!({"value": false}))?;
+    s.run("format.font", &json!({"name": "Arial"}))?;
+    // Back where the person was, moved along by the heading.
+    s.sel = Selection::caret(Pos::new(at.story, at.path, at.off + title.len() + 2));
+    sel_result(s)
+}
+
 fn toggle_mode(_s: &mut Session, v: &Value) -> CmdResult {
     let next = v.get("insertNew").and_then(Value::as_bool).unwrap_or(!insert_mode());
     INSERT_NEW.store(next, Ordering::Relaxed);
@@ -248,6 +500,26 @@ pub fn specs() -> Vec<CommandSpec> {
         level_cmd!("emei.plain5", "SubPara 4 - No Number", Level::Plain(5)),
         CommandSpec::new("emei.promote", "Promote Level", "EMEI › Paragraphs", |s, _| shift(s, -1)).when(not_emei),
         CommandSpec::new("emei.demote", "Demote Level", "EMEI › Paragraphs", |s, _| shift(s, 1)).when(not_emei),
+        CommandSpec::new("emei.warning", "Warning", "EMEI › Inserts", |s, v| wcn(s, "warning", v))
+            .params(r#"{"text"?: string}"#)
+            .when(not_emei),
+        CommandSpec::new("emei.caution", "Caution", "EMEI › Inserts", |s, v| wcn(s, "caution", v))
+            .params(r#"{"text"?: string}"#)
+            .when(not_emei),
+        CommandSpec::new("emei.note", "Note", "EMEI › Inserts", |s, v| wcn(s, "note", v)).params(r#"{"text"?: string}"#).when(not_emei),
+        CommandSpec::new("emei.figure", "Insert Graphic", "EMEI › Inserts", figure)
+            .params(
+                r#"{"title": string, "path"?: string, "data"?: base64, "width"?: pt, "alt"?: string} → selection, "awaitingPicture" (no picture given: the caret is in the empty Figure paragraph)"#,
+            )
+            .when(not_emei),
+        CommandSpec::new("emei.table", "Create Table", "EMEI › Inserts", table)
+            .params(
+                r#"{"title": string, "rows"?: n, "cols"?: n, "align"?: "left|centre|right", "indent"?: cm, "rowHeightRule"?: "auto|atLeast|exact", "rowHeight"?: cm, "widths"?: [cm…]}"#,
+            )
+            .when(not_emei),
+        CommandSpec::new("emei.inlineHeading", "In-line Heading", "EMEI › Inserts", inline_heading)
+            .params(r#"{"title": string} (insert mode; restyle mode makes the selection bold Arial)"#)
+            .when(not_emei),
         CommandSpec::new("emei.toggleMode", "Insert New / Restyle", "EMEI › Paragraphs", toggle_mode)
             .params(r#"{"insertNew"?: bool (default: switch)} → {"insertNew"}"#)
             .pure(),

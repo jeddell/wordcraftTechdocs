@@ -8,6 +8,7 @@ use craft::menu::ribbon::{RibbonGroup, RibbonRow};
 use craft::ui::buttons::{Arrangement, Button, ToggleButton};
 use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::layout_components::Stack;
+use serde_json::json;
 use wordcraft_engine::cmd::emei;
 
 use super::WordApp;
@@ -66,6 +67,28 @@ pub(super) fn emei_tab(row: &mut RibbonRow<'_>, app: &mut WordApp) {
             small(ui, "emei.plain4", tl!("SubPara 3").to_string());
             small(ui, "emei.plain5", tl!("SubPara 4").to_string());
         });
+    });
+
+    row.group(RibbonGroup::new("emei.inserts", tl!("Inserts").to_string(), IconId::new("picture").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            small(ui, "emei.warning", tl!("Warning").to_string());
+            small(ui, "emei.caution", tl!("Caution").to_string());
+            small(ui, "emei.note", tl!("Note").to_string());
+        });
+        Button::command(CommandRef::with_params("ui.dialog", json!({"name": "emeiFigure"})))
+            .label(tl!("Graphic").to_string())
+            .icon(IconId::new("picture"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Button::command(CommandRef::with_params("ui.dialog", json!({"name": "emeiTable"})))
+            .label(tl!("Table").to_string())
+            .icon(IconId::new("table"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        // In restyle mode the in-line heading formats the selection, so it needs no title.
+        let inline =
+            if insert { CommandRef::with_params("ui.dialog", json!({"name": "emeiInlineHeading"})) } else { CommandRef::new("emei.inlineHeading") };
+        Button::command(inline).label(tl!("In-line\nHeading").to_string()).icon(IconId::new("caption")).arrangement(Arrangement::Stacked).show(ui);
     });
 
     row.group(RibbonGroup::new("emei.level", tl!("Level").to_string(), IconId::new("outlinePromote").into()), |ui| {
