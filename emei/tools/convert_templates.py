@@ -67,6 +67,92 @@ def fix_fonts_and_language(xml: str) -> str:
     return re.sub(r'(<w:lang [^>]*w:val=")en-US(")', r"\1en-AU\2", xml)
 
 
+LEVEL_STYLE = re.compile(r'(<w:style [^>]*w:styleId="([^"]+)".*?<w:name w:val="(\d\d)[a-c]? [^"]* - (?:EMEI|UHB)".*?</w:style>)', re.S)
+
+
+def list_level(number: int) -> int | None:
+    """The list level a numbered paragraph style sits on: Paragraph..SubPara 4 are levels 0-4
+    (1. / a. / (1) / (a) / i.), in body text (07-11) and in tables (17-21). LibreOffice's
+    conversion puts them all on level 0, which numbers every level 1., 2., 3."""
+    if 7 <= number <= 11:
+        return number - 7
+    if 17 <= number <= 21:
+        return number - 17
+    return None
+
+
+# Unnumbered headings that the old templates parked on a blank list level.
+UNNUMBERED_HEADINGS = {4, 5, 6, 36}
+
+
+def fix_list_levels(xml: str) -> tuple[str, set[str]]:
+    """Put each numbered style back on its list level; take the unnumbered headings out of the
+    list. Returns the styled xml and the ids of the styles whose numbering this decides."""
+    ids: set[str] = set()
+
+    def fix(m: re.Match) -> str:
+        block, sid, num = m.group(1), m.group(2), int(m.group(3))
+        if "<w:numPr>" not in block:
+            return block
+        lvl = list_level(num)
+        if lvl is not None:
+            ids.add(sid)
+            return re.sub(r'(<w:numPr>\s*<w:ilvl w:val=")\d(")', rf"\g<1>{lvl}\2", block, count=1)
+        if num in UNNUMBERED_HEADINGS:
+            ids.add(sid)
+            return re.sub(r"<w:numPr>.*?</w:numPr>", "", block, count=1, flags=re.S)
+        return block
+
+    return LEVEL_STYLE.sub(fix, xml), ids
+
+
+# The paragraph list's indents (twips) as nearly every legacy template has them: Paragraph's
+# number at the margin, then each SubPara level 1 cm (567) further in with a 1 cm hanging number.
+CANON_INDENTS = {0: (0, 0), 1: (1247, 567), 2: (1814, 567), 3: (2381, 567), 4: (2948, 567)}
+
+
+def fix_list_indents(styles: str, numbering: str) -> str:
+    """Give the body-paragraph list (the one 07 Paragraph uses) the canonical level indents; a
+    few conversions lost them (every level at 0)."""
+    m = re.search(r'<w:style [^>]*w:styleId="07Paragraph-(?:EMEI|UHB)".*?<w:numId w:val="(\d+)"', styles, re.S)
+    if not m:
+        return numbering
+    am = re.search(r'<w:num w:numId="%s"[^>]*>.*?<w:abstractNumId w:val="(\d+)"' % m.group(1), numbering, re.S)
+    if not am:
+        return numbering
+
+    def fix_abstract(a: re.Match) -> str:
+        block = a.group(0)
+        for lvl, (start, hanging) in CANON_INDENTS.items():
+            block = re.sub(
+                r'(<w:lvl w:ilvl="%d".*?)<w:ind [^>]*/>' % lvl,
+                rf'\g<1><w:ind w:start="{start}" w:hanging="{hanging}"/>',
+                block,
+                count=1,
+                flags=re.S,
+            )
+        return block
+
+    return re.sub(r'<w:abstractNum [^>]*w:abstractNumId="%s".*?</w:abstractNum>' % am.group(1), fix_abstract, numbering, count=1, flags=re.S)
+
+
+def drop_direct_numbering(xml: str, style_ids: set[str]) -> str:
+    """Paragraphs in those styles lose direct numbering and indent copies, so the style's list
+    level (and its indents) apply."""
+
+    def fix(m: re.Match) -> str:
+        para = m.group(0)
+        sm = re.search(r'<w:pStyle w:val="([^"]+)"/>', para)
+        if sm and sm.group(1) in style_ids:
+            para = re.sub(r"<w:numPr>.*?</w:numPr>", "", para, count=1, flags=re.S)
+            ppr = re.search(r"<w:pPr>.*?</w:pPr>", para, re.S)
+            if ppr:
+                para = para.replace(ppr.group(0), re.sub(r"<w:ind [^>]*/>", "", ppr.group(0), count=1))
+        return para
+
+    return re.sub(r"<w:p\b[^>]*>.*?</w:p>", fix, xml, flags=re.S)
+
+
 def fix_styles(xml: str) -> str:
     def strip_num(m: re.Match) -> str:
         # Based on Caption (which only adds bold, as these styles already have) so lists of
@@ -127,8 +213,12 @@ def postprocess(src_docx: Path, dst: Path, kind: str) -> dict:
         del parts[n]
     report["removed_vba_parts"] = bad
 
-    parts["word/styles.xml"] = fix_styles(parts["word/styles.xml"].decode("utf-8")).encode()
+    styles, level_ids = fix_list_levels(fix_styles(parts["word/styles.xml"].decode("utf-8")))
+    parts["word/styles.xml"] = styles.encode()
+    if "word/numbering.xml" in parts:
+        parts["word/numbering.xml"] = fix_list_indents(styles, parts["word/numbering.xml"].decode("utf-8")).encode()
     doc, report["captions"] = fix_document(parts["word/document.xml"].decode("utf-8"))
+    doc = drop_direct_numbering(doc, level_ids)
     parts["word/document.xml"] = doc.encode()
 
     for n in list(parts):

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::WordApp;
 
-pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
+pub const TABS: [&str; 14] = wordcraft_engine::ribbon::TABS;
 
 /// True when the caret/selection touches a picture (#147).
 pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {

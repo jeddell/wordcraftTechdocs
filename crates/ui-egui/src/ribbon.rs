@@ -19,6 +19,7 @@ pub(crate) mod common;
 mod context_menu;
 mod design;
 mod draw;
+mod emei; // fork: EMEI/UHB tab
 mod galleries;
 mod home;
 mod insert;
@@ -215,6 +216,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) -> RibbonOutput<String> {
 fn tab_body(row: &mut RibbonRow<'_>, app: &mut WordApp, tab: &str) {
     match tab {
         "Home" => home(row, app),
+        "EMEI" => emei::emei_tab(row, app), // fork: EMEI/UHB tab
         "Insert" => insert(row, app),
         "Draw" => draw(row, app),
         "Design" => design(row, app),

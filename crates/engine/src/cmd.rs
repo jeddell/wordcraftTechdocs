@@ -11,6 +11,7 @@ pub mod controls;
 pub mod design;
 pub mod draw;
 pub mod edit;
+pub mod emei; // fork: EMEI/UHB tab (jeddell/wordcraftTechdocs)
 pub mod equation;
 pub mod fields;
 pub mod file;
@@ -66,6 +67,7 @@ pub fn registry() -> Registry {
     v.extend(caret::specs());
     v.extend(column::specs());
     v.extend(edit::specs());
+    v.extend(emei::specs()); // fork: EMEI/UHB tab
     v.extend(paste::specs());
     v.extend(format::specs());
     v.extend(font::specs());

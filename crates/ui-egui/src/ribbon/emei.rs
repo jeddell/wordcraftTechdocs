@@ -1,0 +1,77 @@
+//! The EMEI tab (fork-only: jeddell/wordcraftTechdocs): the EMEI/UHB house-style paragraph
+//! buttons. Every button runs an `emei.*` engine command, so the same actions work from the CLI,
+//! scripts and automation. See `crates/engine/src/cmd/emei.rs`.
+
+use craft::behavior::IconId;
+use craft::keymap::CommandRef;
+use craft::menu::ribbon::{RibbonGroup, RibbonRow};
+use craft::ui::buttons::{Arrangement, Button, ToggleButton};
+use craft::ui::contract::{Gap, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Stack;
+use wordcraft_engine::cmd::emei;
+
+use super::WordApp;
+
+/// A small text button in a stack.
+fn small(ui: &mut egui::Ui, id: &'static str, label: String) {
+    Button::command(CommandRef::new(id)).label(label).show(ui);
+}
+
+/// The EMEI tab.
+pub(super) fn emei_tab(row: &mut RibbonRow<'_>, app: &mut WordApp) {
+    let insert = emei::insert_mode();
+    let uhb = emei::kind(&app.session) == Some(emei::Kind::Uhb);
+
+    row.group(RibbonGroup::new("emei.mode", tl!("Mode").to_string(), IconId::new("styles").into()), |ui| {
+        let label = if insert { tl!("Insert\nNew") } else { tl!("Restyle\nSelection") };
+        ToggleButton::command(CommandRef::new("emei.toggleMode")).label(label.to_string()).icon(IconId::new("styles")).selected(insert).show(ui);
+    });
+
+    row.group(RibbonGroup::new("emei.headings", tl!("Headings").to_string(), IconId::new("outline").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            let main = if uhb { tl!("Main Heading") } else { tl!("Division Heading") };
+            small(ui, "emei.mainHeading", main.to_string());
+            small(ui, "emei.groupHeading", tl!("Group Heading").to_string());
+            small(ui, "emei.paraHeading", tl!("Para Heading").to_string());
+        });
+    });
+
+    row.group(RibbonGroup::new("emei.numbered", tl!("Numbered").to_string(), IconId::new("multilevel").into()), |ui| {
+        Button::command(CommandRef::new("emei.para1"))
+            .label(tl!("Paragraph").to_string())
+            .icon(IconId::new("multilevel"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            small(ui, "emei.para2", tl!("SubPara 1").to_string());
+            small(ui, "emei.para3", tl!("SubPara 2").to_string());
+        });
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            small(ui, "emei.para4", tl!("SubPara 3").to_string());
+            small(ui, "emei.para5", tl!("SubPara 4").to_string());
+        });
+    });
+
+    row.group(RibbonGroup::new("emei.unnumbered", tl!("No Number").to_string(), IconId::new("indent").into()), |ui| {
+        Button::command(CommandRef::new("emei.plain1"))
+            .label(tl!("Para").to_string())
+            .icon(IconId::new("indent"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            small(ui, "emei.plain2", tl!("SubPara 1").to_string());
+            small(ui, "emei.plain3", tl!("SubPara 2").to_string());
+        });
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            small(ui, "emei.plain4", tl!("SubPara 3").to_string());
+            small(ui, "emei.plain5", tl!("SubPara 4").to_string());
+        });
+    });
+
+    row.group(RibbonGroup::new("emei.level", tl!("Level").to_string(), IconId::new("outlinePromote").into()), |ui| {
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            Button::command(CommandRef::new("emei.promote")).label(tl!("Promote").to_string()).icon(IconId::new("outlinePromote")).show(ui);
+            Button::command(CommandRef::new("emei.demote")).label(tl!("Demote").to_string()).icon(IconId::new("outlineDemote")).show(ui);
+        });
+    });
+}
