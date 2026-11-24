@@ -23,7 +23,7 @@ pub(super) fn emei_tab(row: &mut RibbonRow<'_>, app: &mut WordApp) {
     let uhb = emei::kind(&app.session) == Some(emei::Kind::Uhb);
 
     row.group(RibbonGroup::new("emei.mode", tl!("Mode").to_string(), IconId::new("styles").into()), |ui| {
-        let label = if insert { tl!("Insert\nNew") } else { tl!("Restyle\nSelection") };
+        let label = if insert { tl!("Insert") } else { tl!("Restyle") };
         ToggleButton::command(CommandRef::new("emei.toggleMode")).label(label.to_string()).icon(IconId::new("styles")).selected(insert).show(ui);
     });
 
