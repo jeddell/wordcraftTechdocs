@@ -291,25 +291,43 @@ fn wcn(s: &mut Session, which: &str, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Title case as the old toolbar applied it to captions and in-line headings: each word starts
-/// with a capital. The rest of each word is kept as typed, so acronyms (NSN, EMEI) survive.
+/// Small words that stay lower case inside a title (not as its first word).
+const SMALL_WORDS: [&str; 26] = [
+    "a", "an", "and", "as", "at", "but", "by", "for", "from", "if", "in", "into", "nor", "of", "off", "on", "onto", "or", "over", "per", "so", "the",
+    "to", "up", "via", "with",
+];
+
+/// Title case for captions and in-line headings: each word starts with a capital, except small
+/// words (of, the, and…) after the first word, which are lower case. The rest of each word is kept
+/// as typed, so acronyms (NSN, EMEI) survive; a word typed all in capitals is never lowered.
 fn title_case(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut start = true;
-    for c in text.trim().chars() {
-        if start && c.is_alphabetic() {
-            out.extend(c.to_uppercase());
-            start = false;
-        } else {
-            out.push(c);
-            if c.is_whitespace() || c == '-' || c == '/' {
-                start = true;
-            } else if c.is_alphanumeric() {
+    let mut out = Vec::new();
+    for (i, word) in text.split_whitespace().enumerate() {
+        let lower = word.to_lowercase();
+        let all_caps = word.chars().any(char::is_alphabetic) && !word.chars().any(char::is_lowercase);
+        if i > 0 && !all_caps && SMALL_WORDS.contains(&lower.as_str()) {
+            out.push(lower);
+            continue;
+        }
+        // Capitalise the first letter of the word and of each part after a hyphen or slash.
+        let mut w = String::with_capacity(word.len());
+        let mut start = true;
+        for c in word.chars() {
+            if start && c.is_alphabetic() {
+                w.extend(c.to_uppercase());
                 start = false;
+            } else {
+                w.push(c);
+                if c == '-' || c == '/' {
+                    start = true;
+                } else if c.is_alphanumeric() {
+                    start = false;
+                }
             }
         }
+        out.push(w);
     }
-    out
+    out.join(" ")
 }
 
 /// Fill the (empty, styled) caption paragraph at the caret: `Figure 3    Title`; in a UHB the
@@ -461,6 +479,114 @@ fn inline_heading(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Document tools: contents, lists of figures/tables, chapters, draft marking, field updates.
+// ---------------------------------------------------------------------------------------------
+
+/// Table of contents from the house headings: EMEI Division 1 / Group 2 / Para heading 3; UHB
+/// Section 1 / Chapter title 2 / Chapter number 3 / Main 4 / Group 5 (as the UHB TOC template).
+fn toc(s: &mut Session, _: &Value) -> CmdResult {
+    let k = need_kind(s)?;
+    let levels: &[(u8, u8)] = match k {
+        Kind::Emei => &[(4, 1), (5, 2), (6, 3)],
+        Kind::Uhb => &[(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)],
+    };
+    let mut map = serde_json::Map::new();
+    for (n, level) in levels {
+        if let Some(name) = style_named(s, k, *n) {
+            map.insert(name, json!(level));
+        }
+    }
+    if map.is_empty() {
+        return Err(CmdError::Failed("this document has none of the EMEI/UHB heading styles".into()));
+    }
+    fresh_paragraph(s)?;
+    s.run(
+        "references.toc",
+        &json!({"headingStyles": false, "outlineLevels": false, "styleLevels": map, "tabLeader": "dot", "rightAlign": true, "pageNumbers": true}),
+    )?;
+    sel_result(s)
+}
+
+fn list_of(s: &mut Session, label: &str) -> CmdResult {
+    need_kind(s)?;
+    fresh_paragraph(s)?;
+    s.run("references.tableOfFigures", &json!({"label": label, "tabLeader": "dot"}))?;
+    sel_result(s)
+}
+
+/// Insert Chapter (UHB): a new page, the chapter number paragraph (`Chapter {SEQ Chapter}`, which
+/// also restarts the figure and table numbers), the chapter title, and an empty Main heading with
+/// the caret in it. `number` starts the chapters of this file from that number (each UHB section
+/// is its own file).
+fn chapter(s: &mut Session, v: &Value) -> CmdResult {
+    let k = need_kind(s)?;
+    if k != Kind::Uhb {
+        return Err(CmdError::Failed("chapters are for UHB sections; this is an EMEI".into()));
+    }
+    let number_style = need_style(s, k, 3)?;
+    let title_style = need_style(s, k, 2)?;
+    let main_style = need_style(s, k, 4)?;
+    let title = v.get("title").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).unwrap_or("Chapter Title").to_uppercase();
+    let restart = v.get("number").and_then(Value::as_u64).filter(|n| (1..=99).contains(n));
+
+    // A chapter starts on a new page, unless the caret is in an empty paragraph at the top.
+    let at_top = s.sel.focus.path.last() == 0 && s.sel.focus.path.depth() == 0;
+    fresh_paragraph(s)?;
+    if !at_top {
+        s.run("text.pageBreak", &json!({}))?;
+    }
+    s.run("para.style", &json!({"style": number_style}))?;
+    s.run("text.insert", &json!({"text": "Chapter "}))?;
+    let seq = match restart {
+        Some(n) => format!(" SEQ Chapter \\r {n} \\* ARABIC "),
+        None => " SEQ Chapter \\* ARABIC ".to_string(),
+    };
+    s.run("insert.field", &json!({"instr": seq, "result": restart.unwrap_or(1).to_string()}))?;
+    // Figures and tables number from 1 again in each chapter (hidden resets).
+    s.run("insert.field", &json!({"instr": " SEQ Figure \\r 0 \\h ", "result": ""}))?;
+    s.run("insert.field", &json!({"instr": " SEQ Table \\r 0 \\h ", "result": ""}))?;
+    new_paragraph_after(s)?;
+    s.run("para.style", &json!({"style": title_style}))?;
+    s.run("text.insert", &json!({"text": title}))?;
+    new_paragraph_after(s)?;
+    s.run("para.style", &json!({"style": main_style}))?;
+    update_all(s, &json!({}))?;
+    sel_result(s)
+}
+
+/// Update every field: SEQ numbers, cross-references, the contents and the lists. The caret
+/// stays where it was.
+fn update_all(s: &mut Session, _: &Value) -> CmdResult {
+    let keep = s.sel.clone();
+    s.run("select.all", &json!({}))?;
+    let r = s.run("references.updateFields", &json!({}));
+    s.sel = keep;
+    r?;
+    // Contents and lists rebuild from the headings and captions as they now read.
+    let _ = s.run("references.updateToc", &json!({}));
+    let _ = s.run("references.updateFigures", &json!({}));
+    sel_result(s)
+}
+
+/// Draft marking: a diagonal DRAFT watermark on every page, on or off.
+fn draft(s: &mut Session, v: &Value) -> CmdResult {
+    need_kind(s)?;
+    let on_now = s.doc.settings.watermark.as_ref().is_some_and(|w| w.text.eq_ignore_ascii_case("DRAFT"));
+    let want = v.get("value").and_then(Value::as_bool).unwrap_or(!on_now);
+    if want {
+        s.run("design.watermark", &json!({"text": "DRAFT", "diagonal": true, "color": "BFBFBF"}))?;
+    } else if on_now {
+        s.run("design.watermark", &json!({"remove": true}))?;
+    }
+    Ok(json!({"draft": want}))
+}
+
+/// Whether the document is marked DRAFT (for the tab's toggle).
+pub fn is_draft(s: &Session) -> bool {
+    s.doc.settings.watermark.as_ref().is_some_and(|w| w.text.eq_ignore_ascii_case("DRAFT"))
+}
+
 fn toggle_mode(_s: &mut Session, v: &Value) -> CmdResult {
     let next = v.get("insertNew").and_then(Value::as_bool).unwrap_or(!insert_mode());
     INSERT_NEW.store(next, Ordering::Relaxed);
@@ -520,6 +646,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("emei.inlineHeading", "In-line Heading", "EMEI › Inserts", inline_heading)
             .params(r#"{"title": string} (insert mode; restyle mode makes the selection bold Arial)"#)
             .when(not_emei),
+        CommandSpec::new("emei.toc", "Table of Contents", "EMEI › Document", toc).when(not_emei),
+        CommandSpec::new("emei.listFigures", "List of Figures", "EMEI › Document", |s, _| list_of(s, "Figure")).when(not_emei),
+        CommandSpec::new("emei.listTables", "List of Tables", "EMEI › Document", |s, _| list_of(s, "Table")).when(not_emei),
+        CommandSpec::new("emei.chapter", "Insert Chapter", "EMEI › Document", chapter)
+            .params(r#"{"title"?: string, "number"?: 1-99 (start this file's chapters at this number)} (UHB)"#)
+            .when(not_emei),
+        CommandSpec::new("emei.updateAll", "Update All", "EMEI › Document", update_all).when(not_emei),
+        CommandSpec::new("emei.draft", "Draft", "EMEI › Document", draft).params(r#"{"value"?: bool (default: switch)} → {"draft"}"#).when(not_emei),
         CommandSpec::new("emei.toggleMode", "Insert New / Restyle", "EMEI › Paragraphs", toggle_mode)
             .params(r#"{"insertNew"?: bool (default: switch)} → {"insertNew"}"#)
             .pure(),
@@ -557,6 +691,14 @@ mod tests {
         // After a title or Normal, anything goes.
         assert!(refusal(Level::Para(3), None).is_none());
         assert!(refusal(Level::Para(3), Some(2)).is_none());
+    }
+
+    #[test]
+    fn titles_keep_small_words_and_acronyms() {
+        assert_eq!(title_case("general arrangement of the NSN unit"), "General Arrangement of the NSN Unit");
+        assert_eq!(title_case("the pump and its fittings"), "The Pump and Its Fittings");
+        assert_eq!(title_case("removal OF covers"), "Removal OF Covers");
+        assert_eq!(title_case("air-to-ground link"), "Air-To-Ground Link");
     }
 
     #[test]

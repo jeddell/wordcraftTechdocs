@@ -71,7 +71,7 @@ fn route(app: &mut WordApp, name: &str, params: &Value, parent: Option<DialogId>
         "dateTime" | "columns" | "symbol" | "specialCharacters" | "field" | "insertSmartArt" | "changeChartType" | "insertChart" | "chartData"
         | "dropCap" => dialogs_insert::open(app, name, params, parent),
         "pageSetup" => page_setup::open(app, name, params, parent),
-        "emeiFigure" | "emeiTable" | "emeiInlineHeading" => emei_forms::open(app, name, params, parent), // fork: EMEI/UHB tab
+        "emeiFigure" | "emeiTable" | "emeiInlineHeading" | "emeiChapter" => emei_forms::open(app, name, params, parent), // fork: EMEI/UHB tab
         "link" => link::open(app, name, params, parent),
         "bookmark" | "icons" => bookmarks::open(app, name, params, parent),
         "pasteSpecial" => paste_special::open(app, name, params, parent),

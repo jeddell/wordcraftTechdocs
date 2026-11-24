@@ -20,6 +20,7 @@ pub(crate) fn open(app: &mut WordApp, name: &str, _params: &Value, parent: Optio
         "emeiFigure" => Some(open_figure(app, &ctx, parent)),
         "emeiTable" => Some(open_table(app, &ctx, parent)),
         "emeiInlineHeading" => Some(open_inline_heading(app, &ctx, parent)),
+        "emeiChapter" => Some(open_chapter(app, &ctx, parent)),
         _ => None,
     }
 }
@@ -173,6 +174,35 @@ fn settle_inline_heading(app: &mut WordApp, _: &Context, id: DialogId) -> Settle
     settle_with(app, id, |app, result| {
         let title = title_text(result)?;
         app.run("emei.inlineHeading", json!({"title": title})).map(|_| ())
+    })
+}
+
+// Insert Chapter (UHB) ----------------------------------------------------------------------
+
+fn open_chapter(app: &mut WordApp, ctx: &Context, parent: Option<DialogId>) -> DialogId {
+    let fields = DialogFields::from_pairs([("title", "")]);
+    let dialog = HostedParamDialog::new(ctx, "emeiChapter", fields, |fields| {
+        let params = vec![
+            Param::new("title", tl!("Chapter title").to_string(), ParamKind::text("")).max_chars(120).field_chars(40),
+            Param::new("restart", tl!("Start this file's chapter numbers at a set number").to_string(), ParamKind::bool(false)),
+            Param::new("number", tl!("First chapter number").to_string(), ParamKind::int(Some(1), Some(99), 1)).enabled_when_in("restart", [true]),
+        ];
+        ParamDialog::command("emeiChapter", tl!("Insert Chapter").to_string(), params)
+            .ok_label(Label::from(tl!("Insert")))
+            .values(Bind::bound(fields))
+            .alt_resets(false)
+    });
+    open_hosted(app, parent, dialog, settle_chapter)
+}
+
+fn settle_chapter(app: &mut WordApp, _: &Context, id: DialogId) -> Settle {
+    settle_with(app, id, |app, result| {
+        let f = &result.fields;
+        let mut params = json!({"title": title_text(result)?});
+        if f.bool("restart").unwrap_or(false) {
+            params["number"] = json!(f.int("number").unwrap_or(1));
+        }
+        app.run("emei.chapter", params).map(|_| ())
     })
 }
 

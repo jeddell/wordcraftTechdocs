@@ -178,6 +178,9 @@ def fix_document(xml: str) -> tuple[str, int]:
         if not sm:
             return para
         word = sm.group(2)
+        # A chapter number in a caption repeats the chapter's (\c); the conversion dropped
+        # the switch the originals wrote as `SEQ Chapter\c`, so every caption would count up.
+        para = re.sub(r"(<w:instrText[^>]*>\s*SEQ Chapter)(?![^<]*\\c)", r"\1 \\c", para)
         # The paragraph may carry its own copy of the style's label numbering.
         para = re.sub(r"<w:numPr>.*?</w:numPr>", "", para, flags=re.S)
         body = para[para.find("</w:pPr>") + len("</w:pPr>") :] if "</w:pPr>" in para else para

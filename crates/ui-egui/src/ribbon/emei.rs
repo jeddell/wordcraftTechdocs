@@ -91,6 +91,31 @@ pub(super) fn emei_tab(row: &mut RibbonRow<'_>, app: &mut WordApp) {
         Button::command(inline).label(tl!("In-line\nHeading").to_string()).icon(IconId::new("caption")).arrangement(Arrangement::Stacked).show(ui);
     });
 
+    row.group(RibbonGroup::new("emei.document", tl!("Document").to_string(), IconId::new("toc").into()), |ui| {
+        Button::command(CommandRef::new("emei.toc"))
+            .label(tl!("Contents").to_string())
+            .icon(IconId::new("toc"))
+            .arrangement(Arrangement::Stacked)
+            .show(ui);
+        Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
+            small(ui, "emei.listFigures", tl!("List of Figures").to_string());
+            small(ui, "emei.listTables", tl!("List of Tables").to_string());
+            Button::command(CommandRef::new("emei.updateAll")).label(tl!("Update All").to_string()).icon(IconId::new("updateTable")).show(ui);
+        });
+        if uhb {
+            Button::command(CommandRef::with_params("ui.dialog", json!({"name": "emeiChapter"})))
+                .label(tl!("Insert\nChapter").to_string())
+                .icon(IconId::new("header"))
+                .arrangement(Arrangement::Stacked)
+                .show(ui);
+        }
+        ToggleButton::command(CommandRef::new("emei.draft"))
+            .label(tl!("Draft").to_string())
+            .icon(IconId::new("draft"))
+            .selected(emei::is_draft(&app.session))
+            .show(ui);
+    });
+
     row.group(RibbonGroup::new("emei.level", tl!("Level").to_string(), IconId::new("outlinePromote").into()), |ui| {
         Stack::new().gap(Gap::Tight).show(ui, |ui, _| {
             Button::command(CommandRef::new("emei.promote")).label(tl!("Promote").to_string()).icon(IconId::new("outlinePromote")).show(ui);

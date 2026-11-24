@@ -36,9 +36,6 @@ and tags each template with the document property `EMEIUHB = EMEI | UHB`.
 - Step 1: fork builds; CLI opens and renders all templates. Done.
 - Step 2: 44 templates converted and verified (no macro parts, open and render in WordCraft,
   EMEI list of tables fills). Done.
-- Known: UHB captions use the legacy chapter scheme (`Chapter {SEQ Chapter}`,
-  `Table {SEQ Chapter}-{SEQ Table}`). They display correctly but WordCraft's lists of
-  figures/tables do not read them yet; to be resolved with Insert Chapter (step 5).
 - Step 3: EMEI tab (after Home): Insert/Restyle toggle; Division/Main, Group and Para headings;
   Paragraph and SubPara 1–4, numbered and unnumbered (table variants inside tables); Promote and
   Demote; the legacy one-level-deeper rule. Done.
@@ -46,7 +43,16 @@ and tags each template with the document property `EMEIUHB = EMEI | UHB`.
   dialog, then the picture chooser; caption "Figure n    Title" below, UHB "Figure c-n"); Table
   (title, rows, columns, position/indent, row height, column widths; title above, grid borders);
   In-line Heading. Done.
-- Steps 5–6: document tools (TOC, lists of figures/tables, Insert Chapter, Draft), packaging.
+- Step 5: Document group: Contents (EMEI Division/Group/Para headings; UHB Section/Chapter/Main/
+  Group), List of Figures, List of Tables, Update All, Insert Chapter (UHB: new page,
+  `Chapter {SEQ Chapter}` resetting figure/table numbers, title, Main heading; optional starting
+  number per file), Draft (diagonal DRAFT watermark). UHB captions `Figure {SEQ Chapter \c}-{SEQ
+  Figure}` are listed: WordCraft's list builder now matches a caption by any of its SEQ fields, as
+  Word does (`crates/engine/src/cmd/citations/generated.rs`, marked "fork"). Done.
+- Step 6: packaging.
+
+Tip: add the contents and lists when the body is written (or in their own file, as UHB AI/AJ/AK
+are), then press Update All after later edits.
 
 All tab actions are engine commands (`wordcraft-cli commands | grep ^emei.`), so they also work
 from scripts: see `crates/engine/src/cmd/emei.rs` for parameters.

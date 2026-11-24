@@ -139,14 +139,20 @@ fn captioned_as(doc: &Document, p: &Paragraph, ident: &str) -> bool {
     if !is_caption(doc, p) {
         return false;
     }
-    let seq = p.objects.iter().find_map(|o| match o {
-        InlineObject::Field { instr, .. } => Some(FieldCode::parse(instr)).filter(|f| f.name == "SEQ"),
-        _ => None,
-    });
-    match seq {
-        Some(f) => f.args.first().is_some_and(|id| id.eq_ignore_ascii_case(ident)),
-        None => caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident)),
+    // Any of its SEQ fields, not only the first: a caption numbered within its chapter
+    // (`Figure {SEQ Chapter \c}-{SEQ Figure}`) starts with the chapter's. (fork: EMEI/UHB)
+    let seqs: Vec<FieldCode> = p
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Field { instr, .. } => Some(FieldCode::parse(instr)).filter(|f| f.name == "SEQ"),
+            _ => None,
+        })
+        .collect();
+    if seqs.is_empty() {
+        return caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident));
     }
+    seqs.iter().any(|f| f.args.first().is_some_and(|id| id.eq_ignore_ascii_case(ident)))
 }
 
 /// A caption's text without its label and number (`\a`): what follows its SEQ field, or for a
